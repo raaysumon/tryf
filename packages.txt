@@ -1,3 +1,0 @@
-libgl1
-libglib2.0-bin
-libgconf-2-4
