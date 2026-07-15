@@ -1,4 +1,4 @@
-# ১. ওএস ও ওপেনসিভি কনফ্লিক্ট এড়ানোর জন্য ম্যাজিক লাইন (অবশ্যই সবার উপরে থাকবে)
+# ১. ওএস ও ওপেনসিভি কনফ্লিক্ট এড়ানোর জন্য কনফিগারেশন (অবশ্যই সবার উপরে থাকবে)
 import os
 import sys
 os.environ["OPENCV_VIDEOIO_PRIORITY_MSMF"] = "0"
@@ -61,9 +61,11 @@ if image_file is not None:
     image = Image.open(image_file)
     img_array = np.array(image)
     
-    # RGB ফর্ম্যাটে কনভার্ট (কারন MediaPipe RGB ব্যবহার করে)
-    if img_array.shape[2] == 4: # RGBA হলে RGB করা
+    # RGBA হলে RGB করা (কারন MediaPipe RGB ব্যবহার করে)
+    if len(img_array.shape) == 3 and img_array.shape[2] == 4:
         img_array = cv2.cvtColor(img_array, cv2.COLOR_RGBA2RGB)
+    elif len(img_array.shape) == 2: # গ্রে-স্কেল হলে RGB করা
+        img_array = cv2.cvtColor(img_array, cv2.COLOR_GRAY2RGB)
     
     h, w, _ = img_array.shape
     
@@ -88,7 +90,7 @@ if image_file is not None:
                 cv2.circle(annotated_img, tuple(pt.astype(int)), 6, (0, 255, 0), -1)
                 
             # ফলাফল স্ক্রিনে দেখানো
-            st.image(annotated_img, caption="প্রসেসড ছবি", use_column_width=True)
+            st.image(annotated_img, caption="প্রসেসড ছবি", use_container_width=True)
             
             st.subheader("📊 পরিমাপের ফলাফল:")
             st.write(f"**আপনার মুখের দৈর্ঘ্য ও প্রস্থের অনুপাত (Ratio):** `{ratio:.3f}`")
@@ -96,7 +98,7 @@ if image_file is not None:
             # গোল্ডেন রেশিও ১.৬১৮ এর সাথে তুলনা
             ideal_ratio = 1.618
             accuracy = (1 - abs(ratio - ideal_ratio) / ideal_ratio) * 100
-            accuracy = max(0, min(100, accuracy)) # ০ থেকে ১০০ এর মধ্যে রাখা
+            accuracy = max(0.0, min(100.0, accuracy)) # ০ থেকে ১০০ এর মধ্যে রাখা
             
             st.info(f"🧬 আদর্শ গোল্ডেন রেশিও হলো **1.618**। আপনার মুখমণ্ডল আদর্শ অনুপাতের তুলনায় **{accuracy:.2f}%** সামঞ্জস্যপূর্ণ!")
             
