@@ -9,55 +9,54 @@ import cv2
 import mediapipe as mp
 import numpy as np
 from PIL import Image
+import face_recognition
 
 # পেজ কনফিগারেশন
 st.set_page_config(
-    page_title="AI Facial Landmark & Symmetry Analyzer",
-    page_icon="🤖",
+    page_title="AI Face Recognition & Symmetry Analyzer",
+    page_icon="🧠",
     layout="wide"
 )
 
-# প্রিমিয়াম ডার্ক থিম ও রেডিমেড কাস্টম কার্ড স্টাইল
+# সেশন স্টেট (ডাটাবেজ) তৈরি করা - যেখানে নাম ও ফেস ডাটা সেভ থাকবে
+if 'known_face_encodings' not in st.session_state:
+    st.session_state['known_face_encodings'] = []
+if 'known_face_names' not in st.session_state:
+    st.session_state['known_face_names'] = []
+
+# প্রিমিয়াম সায়েন্স থিম CSS
 st.markdown("""
     <style>
-    .main {
-        background-color: #0b0f19;
-    }
+    .main { background-color: #0b0f19; }
     .report-card {
         background: linear-gradient(135deg, #111827 0%, #1f2937 100%);
-        padding: 22px;
+        padding: 20px;
         border-radius: 15px;
         border: 1.5px solid #4f46e5;
         box-shadow: 0 10px 25px rgba(79, 70, 229, 0.15);
-        margin-bottom: 20px;
+        margin-bottom: 15px;
         color: #f3f4f6;
     }
-    .report-title {
-        font-size: 14px;
+    .report-title { font-size: 13px; font-weight: bold; text-transform: uppercase; color: #818cf8; }
+    .report-value { font-size: 32px; font-weight: 900; color: #34d399; margin: 5px 0; }
+    .welcome-banner {
+        background: linear-gradient(90deg, #06b6d4 0%, #3b82f6 100%);
+        padding: 15px;
+        border-radius: 10px;
+        color: white;
+        font-size: 20px;
         font-weight: bold;
-        text-transform: uppercase;
-        letter-spacing: 2px;
-        color: #818cf8;
-    }
-    .report-value {
-        font-size: 38px;
-        font-weight: 900;
-        color: #34d399;
-        margin: 8px 0;
-    }
-    .report-desc {
-        font-size: 13.5px;
-        color: #9ca3af;
-        line-height: 1.5;
+        text-align: center;
+        margin-bottom: 20px;
     }
     </style>
 """, unsafe_allow_html=True)
 
-st.markdown("<h1 style='text-align: center; color: #818cf8;'>🤖 AI Facial Landmark & Symmetry Analyzer</h1>", unsafe_allow_html=True)
-st.markdown("<p style='text-align: center; color: #9ca3af; font-size: 16px;'>৪৬৮টি ত্রিমাত্রিক (3D) বায়োমেট্রিক নোডের সমন্বয়ে পূর্ণাঙ্গ ফেস প্রোফাইল বিশ্লেষণ</p>", unsafe_allow_html=True)
+st.markdown("<h1 style='text-align: center; color: #818cf8;'>🧠 AI Face Recognition & Symmetry Analyzer</h1>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: #9ca3af; font-size: 16px;'>ফেসিয়াল রিকগনিশন মেমোরি ও ৩D বায়োমেট্রিক অ্যানালাইজার</p>", unsafe_allow_html=True)
 st.write("---")
 
-# মিডিয়াপাইপ ফেস ডিক্টেশন মডিউল
+# মিডিয়াপাইপ মডিউল
 mp_face_mesh = mp.solutions.face_mesh
 mp_drawing = mp.solutions.drawing_utils
 mp_drawing_styles = mp.solutions.drawing_styles
@@ -66,30 +65,20 @@ face_mesh = mp_face_mesh.FaceMesh(
     static_image_mode=True,
     max_num_faces=1,
     refine_landmarks=True,
-    min_detection_confidence=0.7 # কনফিডেন্স বাড়ানো হয়েছে নিখুঁত ট্র্যাকিংয়ের জন্য
+    min_detection_confidence=0.7
 )
 
-# ফেস সোজা আছে কি না তা যাচাই করার ফাংশন (Pose Validation)
+# পোজ চেকার ফাংশন
 def check_face_pose(landmarks):
-    # বাম চোখ (33), ডান চোখ (263), নাকের ডগা (1)
     il = landmarks[33]
     ir = landmarks[263]
     nose = landmarks[1]
-    
-    # দুই চোখের মাঝখানের এক্স-পজিশন
     mid_eye_x = (il.x + ir.x) / 2
-    # নাক চোখের মাঝখান থেকে কতখানি দূরে (左右 asymmetry)
     turn_ratio = abs(nose.x - mid_eye_x) / abs(il.x - ir.x)
-    
-    # চোখের লেভেল (上下 বা ঘাড় বাঁকা কি না)
     tilt = abs(il.y - ir.y)
-    
-    # মুখ সামান্যতম বাঁকা থাকলে False রিটার্ন করবে (Threshold: turn_ratio < 0.08, tilt < 0.04)
-    if turn_ratio > 0.08 or tilt > 0.04:
-        return False
-    return True
+    return turn_ratio <= 0.08 and tilt <= 0.04
 
-# বায়োমেট্রিক পরিমাপের প্রধান ফাংশন
+# বায়োমেট্রিক অ্যানালাইসিস ফাংশন
 def analyze_comprehensive_face(landmarks, w, h):
     def get_pt(idx):
         return np.array([landmarks[idx].x * w, landmarks[idx].y * h], dtype=np.float64)
@@ -103,47 +92,20 @@ def analyze_comprehensive_face(landmarks, w, h):
         'eye_left_outer': get_pt(33), 'eye_left_inner': get_pt(133),
         'eye_right_inner': get_pt(362), 'eye_right_outer': get_pt(263),
     }
+    face_ratio = np.linalg.norm(pts['forehead'] - pts['chin']) / np.linalg.norm(pts['left_cheek'] - pts['right_cheek'])
+    nose_ratio = np.linalg.norm(pts['nose_top'] - pts['nose_tip']) / np.linalg.norm(pts['nose_left'] - pts['nose_right'])
+    mouth_nose_ratio = np.linalg.norm(pts['mouth_left'] - pts['mouth_right']) / np.linalg.norm(pts['nose_left'] - pts['nose_right'])
+    eye_gap_ratio = np.linalg.norm(pts['eye_left_inner'] - pts['eye_right_inner']) / np.linalg.norm(pts['eye_left_outer'] - pts['eye_left_inner'])
 
-    # ১. সার্বিক মুখাবয়ব
-    face_len = np.linalg.norm(pts['forehead'] - pts['chin'])
-    face_wid = np.linalg.norm(pts['left_cheek'] - pts['right_cheek'])
-    face_ratio = face_len / face_wid if face_wid > 0 else 0
+    return {'face_ratio': face_ratio, 'nose_ratio': nose_ratio, 'mouth_nose_ratio': mouth_nose_ratio, 'eye_gap_ratio': eye_gap_ratio, 'points': pts}
 
-    # ২. নাকের জ্যামিতি
-    nose_len = np.linalg.norm(pts['nose_top'] - pts['nose_tip'])
-    nose_wid = np.linalg.norm(pts['nose_left'] - pts['nose_right'])
-    nose_ratio = nose_len / nose_wid if nose_wid > 0 else 0
-
-    # ৩. ঠোঁট ও নাকের অনুপাত
-    mouth_wid = np.linalg.norm(pts['mouth_left'] - pts['mouth_right'])
-    mouth_nose_ratio = mouth_wid / nose_wid if nose_wid > 0 else 0
-
-    # ৪. চোখের প্রতিসাম্য অনুপাত
-    left_eye_wid = np.linalg.norm(pts['eye_left_outer'] - pts['eye_left_inner'])
-    eye_gap = np.linalg.norm(pts['eye_left_inner'] - pts['eye_right_inner'])
-    eye_gap_ratio = eye_gap / left_eye_wid if left_eye_wid > 0 else 0
-
-    return {
-        'face_ratio': face_ratio,
-        'nose_ratio': nose_ratio,
-        'mouth_nose_ratio': mouth_nose_ratio,
-        'eye_gap_ratio': eye_gap_ratio,
-        'points': pts
-    }
-
-# ২টি কলামের স্ট্রাকচার
+# ২টি কলাম লেআউট
 col1, col2 = st.columns([1.1, 1.0], gap="large")
 
 with col1:
-    st.subheader("📸 ক্যামেরা ও কন্ট্রোল প্যানেল")
-    show_mesh_grid = st.checkbox("💻 ৪৬৮-পয়েন্ট এআই গ্রিড (Face Mesh) चालू করুন", value=True)
-    option = st.radio("ইনপুট সোর্স সিলেক্ট করুন:", ("ফাইল আপলোড", "লাইভ ক্যামেরা স্ন্যাপ"))
-    
-    image_file = None
-    if option == "ফাইল আপলোড":
-        image_file = st.file_uploader("আপনার একটি সোজা ছবি ড্রপ করুন", type=['jpg', 'jpeg', 'png'])
-    else:
-        image_file = st.camera_input("ছবি তোলার সময় সোজা এবং স্থিরভাবে তাকান")
+    st.subheader("📸 এআই স্ক্যানার ক্যামেরা")
+    show_mesh_grid = st.checkbox("💻 ৪৬৮-পয়েন্ট এআই গ্রিড চালু রাখুন", value=True)
+    image_file = st.camera_input("আপনার মুখ স্ক্যান করুন")
 
 if image_file is not None:
     image = Image.open(image_file)
@@ -151,101 +113,101 @@ if image_file is not None:
     
     if len(img_array.shape) == 3 and img_array.shape[2] == 4:
         img_array = cv2.cvtColor(img_array, cv2.COLOR_RGBA2RGB)
-    elif len(img_array.shape) == 2:
-        img_array = cv2.cvtColor(img_array, cv2.COLOR_GRAY2RGB)
         
     h, w, _ = img_array.shape
+    
+    # ------------------ ১. ফেস রিকগনিশন পার্ট (Face Recognition) ------------------
+    face_locations = face_recognition.face_locations(img_array)
+    face_encodings = face_recognition.face_encodings(img_array, face_locations)
+    
+    identified_name = "Unknown"
+    current_face_encoding = None
+    
+    if len(face_encodings) > 0:
+        current_face_encoding = face_encodings[0]
+        # আগের সেভ করা ফেসের সাথে মিলানো
+        if len(st.session_state['known_face_encodings']) > 0:
+            matches = face_recognition.compare_faces(st.session_state['known_face_encodings'], current_face_encoding, tolerance=0.6)
+            face_distances = face_recognition.face_distance(st.session_state['known_face_encodings'], current_face_encoding)
+            best_match_index = np.argmin(face_distances) if len(face_distances) > 0 else None
+            
+            if best_match_index is not None and matches[best_match_index]:
+                identified_name = st.session_state['known_face_names'][best_match_index]
+
+    # ------------------ ২. মিডিয়াপাইপ ল্যান্ডমার্ক ট্র্যাকিং ------------------
     results = face_mesh.process(img_array)
     
     with col2:
-        st.subheader("📊 মাল্টি-পয়েন্ট এআই রিপোর্ট")
+        st.subheader("📊 এআই রিকগনিশন ও বায়োমেট্রিক রিপোর্ট")
         
+        # নাম সনাক্তকরণের স্বাগতম ব্যানার
+        if identified_name != "Unknown":
+            st.markdown(f'<div class="welcome-banner">👋 স্বাগতম ফিরে আসার জন্য, {identified_name}!</div>', unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="welcome-banner" style="background: #ef4444;">👤 নতুন মুখ সনাক্ত করা হয়েছে!</div>', unsafe_allow_html=True)
+            
+            # নতুন নাম রেজিস্টার করার ইনপুট বক্স
+            new_name = st.text_input("এআই আপনাকে চিনতে পারছে না। আপনার নাম লিখে সেভ করুন:")
+            if st.button("💾 এআই মেমোরিতে নাম সেভ করুন"):
+                if new_name.strip() != "" and current_face_encoding is not None:
+                    st.session_state['known_face_encodings'].append(current_face_encoding)
+                    st.session_state['known_face_names'].append(new_name.strip())
+                    st.success(f"🎉 সফলতা! এআই মেমোরিতে '{new_name}' নামটি সেভ করা হয়েছে। পরেরবার স্ক্যান করলে আপনাকে চিনে ফেলবে।")
+                    st.rerun()
+
         if results.multi_face_landmarks:
             for face_landmarks in results.multi_face_landmarks:
-                
-                # নতুন ফিচার: ফেস পোজ ভ্যালিডেশন চেক
                 is_straight = check_face_pose(face_landmarks.landmark)
-                
                 if not is_straight:
-                    st.warning("⚠️ আপনার মুখমণ্ডলটি ক্যামেরার একদম সোজা অবস্থানে নেই! সঠিক ও স্থির স্কোরের জন্য অনুগ্রহ করে মাথা ডানে-বামে বা ওপরে-নিচে না ঝুঁকিয়ে একদম সোজা তাকিয়ে পুনরায় ছবি তুলুন।")
+                    st.warning("⚠️ সঠিক স্কোরের জন্য অনুগ্রহ করে ক্যামেরার দিকে একদম সোজা তাকান।")
                 
-                # ফেস বাঁকা থাকলেও একটি আনুমানিক হিসাব দেখাবে, তবে সোজা থাকলে ১০০% সঠিক ডাটা আসবে
                 analysis = analyze_comprehensive_face(face_landmarks.landmark, w, h)
                 pts = analysis['points']
-                
                 annotated_img = img_array.copy()
                 
+                # ফেসের উপরে সনাক্তকৃত নামটি লিখে দেওয়া (ওপেনসিভি টেক্সট)
+                if face_locations:
+                    top, right, bottom, left = face_locations[0]
+                    cv2.rectangle(annotated_img, (left, top), (right, bottom), (0, 255, 0), 2)
+                    cv2.putText(annotated_img, identified_name, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+
                 if show_mesh_grid:
                     mp_drawing.draw_landmarks(
-                        image=annotated_img,
-                        landmark_list=face_landmarks,
+                        image=annotated_img, landmark_list=face_landmarks,
                         connections=mp_face_mesh.FACEMESH_TESSELATION,
-                        landmark_drawing_spec=None,
-                        connection_drawing_spec=mp_drawing_styles.get_default_face_mesh_tesselation_style()
+                        landmark_drawing_spec=None, connection_drawing_spec=mp_drawing_styles.get_default_face_mesh_tesselation_style()
                     )
                 
+                # ড্রয়িং লাইন
                 color_cyan = (0, 255, 242)
-                color_magenta = (234, 0, 255)
-                color_yellow = (255, 226, 0)
-                
                 cv2.line(annotated_img, tuple(pts['forehead'].astype(int)), tuple(pts['chin'].astype(int)), color_cyan, 3)
                 cv2.line(annotated_img, tuple(pts['left_cheek'].astype(int)), tuple(pts['right_cheek'].astype(int)), color_cyan, 3)
-                cv2.line(annotated_img, tuple(pts['nose_top'].astype(int)), tuple(pts['nose_tip'].astype(int)), color_yellow, 3)
-                cv2.line(annotated_img, tuple(pts['nose_left'].astype(int)), tuple(pts['nose_right'].astype(int)), color_yellow, 3)
-                cv2.line(annotated_img, tuple(pts['mouth_left'].astype(int)), tuple(pts['mouth_right'].astype(int)), color_yellow, 3)
-                cv2.line(annotated_img, tuple(pts['eye_left_outer'].astype(int)), tuple(pts['eye_right_outer'].astype(int)), color_magenta, 2)
                 
                 for key, pt in pts.items():
                     pt_int = (int(round(pt[0])), int(round(pt[1])))
-                    cv2.circle(annotated_img, pt_int, 6, (0, 255, 0), -1)
-                    cv2.circle(annotated_img, pt_int, 9, (255, 255, 255), 1)
+                    cv2.circle(annotated_img, pt_int, 5, (0, 255, 0), -1)
                 
-                st.image(annotated_img, caption="কম্পিউটার ভিশন এনালাইসিস ভিউ", use_container_width=True)
+                st.image(annotated_img, caption="এআই ট্র্যাকিং ভিউ", use_container_width=True)
                 
+                # সিমেট্রি ক্যালকুলেশন
                 phi = 1.618
-                ideal_eye_gap = 1.000
-                
                 def get_accuracy(val, target):
-                    acc = (1 - abs(val - target) / target) * 100
-                    return max(0.0, min(100.0, acc))
+                    return max(0.0, min(100.0, (1 - abs(val - target) / target) * 100))
                 
                 acc_face = get_accuracy(analysis['face_ratio'], phi)
                 acc_nose = get_accuracy(analysis['nose_ratio'], phi)
-                acc_lip_nose = get_accuracy(analysis['mouth_nose_ratio'], phi)
-                acc_eye = get_accuracy(analysis['eye_gap_ratio'], ideal_eye_gap)
                 
                 st.markdown(f"""
                     <div class="report-card" style="border-color: #00f2fe;">
-                        <div class="report-title" style="color: #00f2fe;">১. ফেস স্ট্রাকচার সিমেট্রি (Face Ratio)</div>
-                        <div class="report-value" style="color: #00f2fe;">{analysis['face_ratio']:.3f}</div>
-                        <div class="report-desc">সামঞ্জস্যতা: <b>{acc_face:.2f}%</b>।</div>
+                        <div class="report-title">১. ফেস স্ট্রাকচার অনুপাত</div>
+                        <div class="report-value">{analysis['face_ratio']:.3f}</div>
+                        <div class="report-desc">গোল্ডেন রেশিও সিমেট্রি: <b>{acc_face:.2f}%</b></div>
                     </div>
-                    
                     <div class="report-card" style="border-color: #ffd200;">
-                        <div class="report-title" style="color: #ffd200;">২. নাকের গঠন অনুপাত (Nose Bridge Symmetry)</div>
-                        <div class="report-value" style="color: #ffd200;">{analysis['nose_ratio']:.3f}</div>
-                        <div class="report-desc">সামঞ্জস্যতা: <b>{acc_nose:.2f}%</b>।</div>
-                    </div>
-
-                    <div class="report-card" style="border-color: #38bdf8;">
-                        <div class="report-title" style="color: #38bdf8;">৩. লিপস-টু-নোজ অনুপাত (Nose-to-Mouth Width)</div>
-                        <div class="report-value" style="color: #38bdf8;">{analysis['mouth_nose_ratio']:.3f}</div>
-                        <div class="report-desc">সামঞ্জস্যতা: <b>{acc_lip_nose:.2f}%</b>।</div>
-                    </div>
-
-                    <div class="report-card" style="border-color: #ec4899;">
-                        <div class="report-title" style="color: #ec4899;">৪. চোখের সমন্বয় ও গ্যাপ অনুপাত (Interpupillary Ratio)</div>
-                        <div class="report-value" style="color: #ec4899;">{analysis['eye_gap_ratio']:.3f}</div>
-                        <div class="report-desc">সামঞ্জস্যতা: <b>{acc_eye:.2f}%</b>।</div>
+                        <div class="report-title">২. নাকের জ্যামিতিক অনুপাত</div>
+                        <div class="report-value">{analysis['nose_ratio']:.3f}</div>
+                        <div class="report-desc">গোল্ডেন রেশিও সিমেট্রি: <b>{acc_nose:.2f}%</b></div>
                     </div>
                 """, unsafe_allow_html=True)
-                
-                overall_score = (acc_face + acc_nose + acc_lip_nose + acc_eye) / 4
-                
-                st.write("### 🧬 AI বায়োমেট্রিক সারসংক্ষেপ:")
-                if is_straight:
-                    st.success(f"🔒 **ভ্যালিড স্কোর (স্থির ও সোজা পোজ):** সামগ্রিক সিমেট্রি স্কোর: **{overall_score:.2f}%**")
-                else:
-                    st.info(f"📊 **আনুমানিক স্কোর (অস্থির পোজ):** সামগ্রিক সিমেট্রি স্কোর: **{overall_score:.2f}%** (নিখুঁত স্কোরের জন্য মাথা সোজা করুন)")
         else:
-            st.error("⚠️ মুখমণ্ডল ঠিকভাবে স্ক্যান করা যাচ্ছে না।")
+            st.error("⚠️ মুখমণ্ডল সনাক্ত করা যায়নি।")
